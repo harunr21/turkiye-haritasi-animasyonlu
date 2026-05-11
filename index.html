@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Türkiye Canlı Hizmet Haritası</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    *, *::before, *::after {
+      margin: 0; padding: 0; box-sizing: border-box;
+    }
+
+    body {
+      background: #030912;
+      background-image:
+        radial-gradient(ellipse 80% 50% at 50% 110%, rgba(14, 165, 233, 0.07) 0%, transparent 65%),
+        radial-gradient(ellipse 60% 40% at 20% 0%,   rgba(99, 102, 241, 0.04) 0%, transparent 60%);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+      overflow: hidden;
+    }
+
+    #map-container {
+      width: 96vw;
+      max-width: 1280px;
+    }
+
+    #header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 8px 16px 8px;
+    }
+
+    #title {
+      color: rgba(255, 255, 255, 0.78);
+      font-size: 1.25rem;
+      font-weight: 500;
+      letter-spacing: 0.03em;
+    }
+
+    #live-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #fb7185;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+    }
+
+    #live-dot {
+      width: 8px;
+      height: 8px;
+      background: #f43f5e;
+      border-radius: 50%;
+      box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.5);
+      animation: live-pulse 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+
+    @keyframes live-pulse {
+      0%   { box-shadow: 0 0 0 0   rgba(244, 63, 94, 0.6); }
+      60%  { box-shadow: 0 0 0 7px rgba(244, 63, 94, 0);   }
+      100% { box-shadow: 0 0 0 0   rgba(244, 63, 94, 0);   }
+    }
+
+    #map svg {
+      width: 100%;
+      height: auto;
+      filter: drop-shadow(0 0 56px rgba(14, 165, 233, 0.12));
+    }
+
+    .province {
+      fill: #0a1828;
+      stroke: #14305a;
+      stroke-width: 0.5;
+      transition: fill 2.4s cubic-bezier(0.4, 0, 0.2, 1),
+                  filter 2.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .province.active {
+      fill: #0ea5e9;
+      filter:
+        drop-shadow(0 0 5px #22d3ee)
+        drop-shadow(0 0 20px rgba(14, 165, 233, 0.75))
+        drop-shadow(0 0 40px rgba(14, 165, 233, 0.35));
+      transition: fill 0.18s ease, filter 0.18s ease;
+      animation: province-breathe 2.2s ease-in-out infinite;
+    }
+
+    @keyframes province-breathe {
+      0%, 100% {
+        filter:
+          drop-shadow(0 0 5px #22d3ee)
+          drop-shadow(0 0 20px rgba(14, 165, 233, 0.75))
+          drop-shadow(0 0 40px rgba(14, 165, 233, 0.35));
+      }
+      50% {
+        filter:
+          drop-shadow(0 0 10px #38bdf8)
+          drop-shadow(0 0 30px rgba(14, 165, 233, 0.95))
+          drop-shadow(0 0 60px rgba(14, 165, 233, 0.55));
+      }
+    }
+
+    .pulse-ring {
+      fill: none;
+      stroke: #22d3ee;
+      stroke-width: 2;
+      opacity: 0;
+      animation: pulse-expand 1.9s cubic-bezier(0, 0.55, 0.45, 1) forwards;
+    }
+
+    @keyframes pulse-expand {
+      0%   { r: 3;  opacity: 0.95; stroke-width: 2.8; }
+      40%  {        opacity: 0.5;                      }
+      100% { r: 54; opacity: 0;    stroke-width: 0.3;  }
+    }
+
+    /* Toast — konuşma balonu */
+    .toast {
+      position: fixed;
+      z-index: 999;
+      pointer-events: none;
+      background: rgba(4, 13, 30, 0.94);
+      backdrop-filter: blur(16px) saturate(150%);
+      -webkit-backdrop-filter: blur(16px) saturate(150%);
+      border: 2px solid #22d3ee;
+      border-radius: 16px;
+      padding: 12px 16px;
+      width: 252px;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      /* Dual-layer offset (ikonik comic-bubble efekti) */
+      box-shadow:
+        5px 6px 0 0 rgba(34, 211, 238, 0.55),
+        0 18px 40px rgba(0, 0, 0, 0.70),
+        0 0 28px rgba(14, 165, 233, 0.13),
+        inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      /* Animasyon şehrin üzerinde başlar; translateY(-100%) balonun
+         alt kenarını anchor noktasına hizalar, kuyruk oradan aşağı iner */
+      animation: toast-emerge 4.6s cubic-bezier(0.34, 1.45, 0.64, 1) forwards;
+    }
+
+    /* Kuyruk dış çizgisi (cyan) */
+    .toast::before {
+      content: '';
+      position: absolute;
+      bottom: -20px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 0; height: 0;
+      border-left: 14px solid transparent;
+      border-right: 14px solid transparent;
+      border-top: 20px solid #22d3ee;
+    }
+
+    /* Kuyruk iç dolgu (arka plan rengi) */
+    .toast::after {
+      content: '';
+      position: absolute;
+      bottom: -14px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 0; height: 0;
+      border-left: 10px solid transparent;
+      border-right: 10px solid transparent;
+      border-top: 14px solid rgba(4, 13, 30, 0.94);
+    }
+
+    @keyframes toast-emerge {
+      /* anchor: top = pos.y, translateY(-100%) → balon tabanı tam pos.y'de */
+      0%   { opacity: 0; transform: translateX(-50%) translateY(-78%)  scale(0.82); }
+      15%  { opacity: 1; transform: translateX(-50%) translateY(-107%) scale(1.04); }
+      27%  { opacity: 1; transform: translateX(-50%) translateY(-102%) scale(1);    }
+      68%  { opacity: 1; transform: translateX(-50%) translateY(-102%);             }
+      100% { opacity: 0; transform: translateX(-50%) translateY(-116%) scale(0.93); }
+    }
+
+    .toast-icon { font-size: 1.2rem; flex-shrink: 0; margin-top: 1px; }
+
+    .toast-person {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #38bdf8;
+    }
+
+    .toast-text {
+      font-size: 0.77rem;
+      color: rgba(255, 255, 255, 0.68);
+      margin-top: 3px;
+      line-height: 1.45;
+    }
+
+    .toast-city {
+      color: #e0f2fe;
+      font-weight: 600;
+    }
+
+    .toast-time {
+      font-size: 0.67rem;
+      color: rgba(255, 255, 255, 0.25);
+      margin-top: 6px;
+    }
+
+    #loading {
+      color: rgba(255, 255, 255, 0.32);
+      font-size: 0.95rem;
+      padding: 60px;
+      text-align: center;
+    }
+
+    #error {
+      color: #fb7185;
+      font-size: 0.88rem;
+      padding: 40px;
+      text-align: center;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+
+<div id="map-container">
+  <div id="header">
+    <div id="title">Canlı Hizmet Haritası</div>
+    <div id="live-badge"><div id="live-dot"></div>CANLI</div>
+  </div>
+  <div id="map"><div id="loading">Harita yükleniyor…</div></div>
+</div>
+
+<script>
+const NAMES = [
+  'Ahmet Y.', 'Fatma K.', 'Mehmet A.', 'Ayşe D.', 'Mustafa Ş.',
+  'Emine T.', 'Ali R.',   'Hatice B.', 'Hüseyin Ç.', 'Zeynep M.',
+  'İbrahim O.','Elif S.', 'Süleyman G.','Meryem U.', 'Yusuf E.',
+  'Hacer N.', 'Ömer F.',  'Büşra L.', 'İsmail H.',  'Seda P.',
+  'Recep K.', 'Merve C.', 'Osman T.', 'Yıldız A.',  'Kadir B.'
+];
+
+function rand(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+/* Turkish vowel harmony for locative suffix */
+function fromSuffix(name) {
+  const backVowels = 'aıouAIOU';
+  let last = '';
+  for (const ch of name) {
+    if ('aeıioöuüAEIİOÖUÜ'.includes(ch)) last = ch;
+  }
+  return backVowels.includes(last) ? 'dan' : 'den';
+}
+
+/* Convert SVG viewBox coordinates → screen (fixed) coordinates */
+function svgToScreen(svgEl, svgX, svgY) {
+  const rect = svgEl.getBoundingClientRect();
+  const vb   = svgEl.viewBox.baseVal;
+  return {
+    x: rect.left + (svgX / vb.width)  * rect.width,
+    y: rect.top  + (svgY / vb.height) * rect.height
+  };
+}
+
+function showToast(cityName, svgEl, svgCx, svgCy) {
+  const person = rand(NAMES);
+  const suffix = fromSuffix(cityName);
+  const pos    = svgToScreen(svgEl, svgCx, svgCy);
+
+  const toast = document.createElement('div');
+  toast.className = 'toast';
+  toast.style.left = `${pos.x}px`;
+  /* Anchor'ı şehrin biraz yukarısına al; CSS translateY(-102%) balonun
+     tabanını bu noktaya hizalar, kuyruk oradan şehre doğru iner */
+  toast.style.top  = `${pos.y - 18}px`;
+  toast.innerHTML  = `
+    <div class="toast-icon">📍</div>
+    <div class="toast-body">
+      <div class="toast-person">${person}</div>
+      <div class="toast-text"><span class="toast-city">${cityName}</span>'${suffix} hizmet aldı</div>
+      <div class="toast-time">Az önce</div>
+    </div>`;
+  document.body.appendChild(toast);
+
+  setTimeout(() => toast.remove(), 4500);
+}
+
+/* ── Map ── */
+const W = 1200, H = 560;
+
+const svg = d3.select('#map')
+  .html('')
+  .append('svg')
+  .attr('viewBox', `0 0 ${W} ${H}`);
+
+const svgEl = svg.node();
+
+const ringsGroup = svg.append('g');
+const mapGroup   = svg.append('g');
+
+const SOURCES = [
+  'https://raw.githubusercontent.com/cihadturhan/tr-geojson/master/geo/tr-cities-utf8.json',
+  'https://raw.githubusercontent.com/alpers/Turkey-Maps-D3/master/tr-cities.json'
+];
+
+async function loadGeoJSON() {
+  for (const url of SOURCES) {
+    try {
+      const r = await fetch(url);
+      if (r.ok) return await r.json();
+    } catch (_) {}
+  }
+  throw new Error('Harita verisi yüklenemedi. İnternet bağlantısını kontrol edin.');
+}
+
+function getCityName(props) {
+  return props.name || props.NAME_1 || props.il_adi || props.NAME || '?';
+}
+
+loadGeoJSON()
+  .then(geojson => {
+    const projection = d3.geoMercator()
+      .fitExtent([[12, 8], [W - 12, H - 8]], geojson);
+    const pathGen = d3.geoPath().projection(projection);
+
+    mapGroup.selectAll('path')
+      .data(geojson.features)
+      .enter()
+      .append('path')
+      .attr('class', 'province')
+      .attr('d', pathGen)
+      .attr('data-i', (_, i) => i);
+
+    startLoop(geojson.features, pathGen, svgEl);
+  })
+  .catch(err => {
+    document.getElementById('map').innerHTML =
+      `<div id="error">${err.message}</div>`;
+  });
+
+function startLoop(features, pathGen, svgEl) {
+  const recentSet = new Set();
+
+  function activate() {
+    let idx;
+    do { idx = Math.floor(Math.random() * features.length); }
+    while (recentSet.has(idx) && recentSet.size < features.length);
+
+    recentSet.add(idx);
+    if (recentSet.size > Math.min(10, features.length / 2)) {
+      recentSet.delete(recentSet.values().next().value);
+    }
+
+    const feature  = features[idx];
+    const cityName = getCityName(feature.properties);
+    const el       = mapGroup.select(`[data-i="${idx}"]`);
+
+    el.classed('active', true);
+
+    const [cx, cy] = pathGen.centroid(feature);
+    if (!isNaN(cx) && !isNaN(cy)) {
+      [0, 0.55, 1.15].forEach(delay => {
+        const ring = ringsGroup.append('circle')
+          .attr('class', 'pulse-ring')
+          .attr('cx', cx)
+          .attr('cy', cy)
+          .attr('r', 3)
+          .style('animation-delay', `${delay}s`);
+
+        setTimeout(() => ring.remove(), 1950 + delay * 1000 + 60);
+      });
+    }
+
+    if (!isNaN(cx) && !isNaN(cy)) showToast(cityName, svgEl, cx, cy);
+
+    setTimeout(() => el.classed('active', false), 3000);
+    setTimeout(activate, 4000 + Math.random() * 1000);
+  }
+
+  setTimeout(activate, 900);
+}
+</script>
+
+</body>
+</html>
